@@ -448,7 +448,10 @@
     const bold = await doc.embedFont(StandardFonts.HelveticaBold);
     const form = doc.getForm();
     const hex = h => rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255);
-    const C = { ink: hex("#18212b"), muted: hex("#5d6b7a"), line: hex("#b9c4cf"), field: hex("#f4f6f8"),
+    const tint = (c, t) => rgb(c.red + (1 - c.red) * t, c.green + (1 - c.green) * t, c.blue + (1 - c.blue) * t);
+    const rrect = (w, h, r) => `M ${r} 0 L ${w - r} 0 Q ${w} 0 ${w} ${r} L ${w} ${h - r} Q ${w} ${h} ${w - r} ${h} L ${r} ${h} Q 0 ${h} 0 ${h - r} L 0 ${r} Q 0 0 ${r} 0 Z`;
+    const boldFields = [];
+    const C = { ink: hex("#18212b"), muted: hex("#5d6b7a"), line: hex("#d3dbe3"), conn: hex("#98a6b5"), field: hex("#f2f5f8"), shadow: hex("#e4e9ef"),
       step: hex("#1f6feb"), start: hex("#1a7f5a"), decision: hex("#b7791f"), wait: hex("#7c5cc4"), end: hex("#b42318") };
 
     // Work on a copy so blank slots don't touch the page.
@@ -477,7 +480,7 @@
     function seqH(seq, w) { if (!seq.length) return DIRECT; let h = 0; seq.forEach((_, i) => { h += itemH(seq, i, w) + (i ? GAP : 0); }); return h; }
 
     const contentW = Math.max(612 - 2 * M, minW(items));
-    const W = contentW + 2 * M, BASE_H = 792, HEADER = 120;
+    const W = contentW + 2 * M, BASE_H = 792, HEADER = 136;
 
     // Pack top-level blocks onto pages.
     const pagesPlan = []; let cur = { blocks: [], h: 0 };
@@ -499,75 +502,80 @@
       const H = Math.max(BASE_H, plan.h + 2 * M + 24 + (p === 0 ? HEADER : 28));
       const page = doc.addPage([W, H]);
       const Y = y => H - y; // top-down helper
-      const fo = (x, y, w, h, extra) => Object.assign({ x, y: Y(y + h), width: w, height: h, borderWidth: 0.6, borderColor: C.line, backgroundColor: C.field, textColor: C.ink }, extra || {});
+      const fo = (x, y, w, h, extra) => Object.assign({ x, y: Y(y + h), width: w, height: h, borderWidth: 0, backgroundColor: C.field, textColor: C.ink }, extra || {});
       const text = (str, x, y, size, f, color) => page.drawText(pdfSafe(str), { x, y: Y(y), size, font: f || font, color: color || C.muted });
-      const vline = (x, y1, y2) => page.drawLine({ start: { x, y: Y(y1) }, end: { x, y: Y(y2) }, thickness: 1.4, color: C.line });
-      const hline = (x1, x2, y) => page.drawLine({ start: { x: x1, y: Y(y) }, end: { x: x2, y: Y(y) }, thickness: 1.4, color: C.line });
-      const arrow = (x, yTip) => page.drawSvgPath("M -5 -8 L 5 -8 L 0 0 Z", { x, y: Y(yTip), color: C.line });
+      const vline = (x, y1, y2) => page.drawLine({ start: { x, y: Y(y1) }, end: { x, y: Y(y2) }, thickness: 1.2, color: C.conn });
+      const hline = (x1, x2, y) => page.drawLine({ start: { x: x1, y: Y(y) }, end: { x: x2, y: Y(y) }, thickness: 1.2, color: C.conn });
+      const arrow = (x, yTip) => page.drawSvgPath("M -5 -8 L 5 -8 L 0 0 Z", { x, y: Y(yTip), color: C.conn });
 
       let y = M;
+      page.drawRectangle({ x: 0, y: H - 8, width: W, height: 8, color: C.step });
       if (p === 0) {
-        text("FLOWCHART", M, y + 8, 8, bold);
+        text("FLOWCHART", M, y + 12, 8, bold, C.step);
         const tf = form.createTextField("chart_title"); tf.setText(pdfSafe(state.title));
-        tf.addToPage(page, fo(M, y + 14, contentW - 150, 26)); tf.setFontSize(15);
-        text("LONGEST PATH", M + contentW - 136, y + 8, 8, bold);
-        const tot = form.createTextField("total_time"); tot.setText(fmt(total));
-        tot.addToPage(page, fo(M + contentW - 136, y + 14, 136, 26)); tot.setFontSize(14);
-        // Dates row
+        tf.addToPage(page, fo(M - 3, y + 17, contentW + 6, 30, { backgroundColor: rgb(1, 1, 1) })); tf.setFontSize(20); boldFields.push(tf);
+        page.drawRectangle({ x: M, y: Y(y + 54), width: 36, height: 2.5, color: C.step });
+        // Summary cards
         const pr = (() => { const s0 = startMoment(); if (!s0) return null; const cal = calendar(); return { start: cal.add(s0, 0, true), late: cal.add(s0, total), early: cal.add(s0, computeMin(items, 0)) }; })();
-        const colW = (contentW - 20) / 3;
-        const dateRow = [
-          ["START DATE", "start_date", pr ? fmtDate(pr.start, true) + ", " + fmtTime(pr.start) : ""],
-          ["PROJECTED COMPLETION (LONGEST PATH)", "projected_completion", pr ? fmtDate(pr.late, true) + ", " + fmtTime(pr.late) : ""],
-          ["COMPLETION WINDOW", "completion_window", pr ? (pr.early.getTime() === pr.late.getTime() ? fmtDate(pr.late) : fmtDate(pr.early) + " - " + fmtDate(pr.late)) : ""]
+        const cards = [
+          ["START", "start_date", pr ? fmtDate(pr.start, true) + ", " + fmtTime(pr.start) : "", false],
+          ["PROJECTED COMPLETION", "projected_completion", pr ? fmtDate(pr.late, true) + ", " + fmtTime(pr.late) : "", true],
+          ["COMPLETION WINDOW", "completion_window", pr ? (pr.early.getTime() === pr.late.getTime() ? fmtDate(pr.late) : fmtDate(pr.early) + " - " + fmtDate(pr.late)) : "", false],
+          ["LONGEST PATH", "total_time", fmt(total), false]
         ];
-        dateRow.forEach(([label, fname, val], k) => {
-          const x = M + k * (colW + 10);
-          text(label, x, y + 56, 7, bold);
+        const cw = (contentW - 30) / 4, cy = y + 64, ch = 46;
+        cards.forEach(([label, fname, val, hi], k) => {
+          const x = M + k * (cw + 10);
+          page.drawSvgPath(rrect(cw, ch, 7), { x, y: Y(cy), color: hi ? tint(C.step, 0.92) : rgb(1, 1, 1), borderColor: hi ? C.step : C.line, borderWidth: hi ? 1.1 : 0.8 });
+          text(label, x + 9, cy + 15, 6.5, bold, hi ? C.step : C.muted);
           const f = form.createTextField(fname); f.setText(pdfSafe(val));
-          f.addToPage(page, fo(x, y + 61, colW, 20)); f.setFontSize(10.5);
+          f.addToPage(page, fo(x + 6, cy + 20, cw - 12, 20, { backgroundColor: hi ? tint(C.step, 0.92) : rgb(1, 1, 1) })); f.setFontSize(9.5); boldFields.push(f);
         });
-        text("Every box is a fillable field. Dates and times were calculated at export (8-hour workdays from " + (state.startTime || "09:00") + (state.skipWeekends ? ", weekdays only" : ", weekends included") + "); update them if you change durations.", M, y + 96, 7.5);
+        text("Every box can be typed into. Dates were worked out at export from 8-hour workdays starting " + (state.startTime || "09:00") + (state.skipWeekends ? ", weekdays only" : ", weekends included") + ". Update them if you change a duration.", M, cy + ch + 14, 7);
         y += HEADER;
-      } else { text(pdfSafe(state.title) + " (continued)", M, y + 10, 10, bold, C.ink); y += 28; }
+      } else { text(pdfSafe(state.title), M, y + 14, 11, bold, C.ink); text("continued", M + bold.widthOfTextAtSize(pdfSafe(state.title), 11) + 8, y + 14, 8, font, C.muted); y += 28; }
 
       function drawBox(s, x, y0, w, target) {
         const n = num[s.id], color = C[s.type] || C.step, h = boxH(w, target), wide = w >= 400;
         const round = s.type === "start" || s.type === "end";
-        let path;
-        if (s.type === "decision") { const c = 14; path = `M ${c} 0 L ${w - c} 0 L ${w} ${h / 2} L ${w - c} ${h} L ${c} ${h} L 0 ${h / 2} Z`; }
-        else { const r = round ? 20 : 6; path = `M ${r} 0 L ${w - r} 0 Q ${w} 0 ${w} ${r} L ${w} ${h - r} Q ${w} ${h} ${w - r} ${h} L ${r} ${h} Q 0 ${h} 0 ${h - r} L 0 ${r} Q 0 0 ${r} 0 Z`; }
-        const so = { x, y: Y(y0), color: rgb(1, 1, 1), borderColor: color, borderWidth: 1.4 };
-        if (s.type === "wait") so.borderDashArray = [4, 3];
-        page.drawSvgPath(path, so);
-        if (s.type === "step" || s.type === "wait") page.drawRectangle({ x: x + 1, y: Y(y0 + h - 6), width: 4, height: h - 12, color });
-        const L = x + (round ? (wide ? 18 : 22) : s.type === "decision" ? (wide ? 18 : 24) : 14), innerR = x + w - (round ? (wide ? 16 : 22) : s.type === "decision" ? (wide ? 18 : 24) : 12);
+        const r = round ? 18 : 8, band = wide ? 30 : 24, i = 1.2;
+        // Soft shadow, coloured card, white panel leaving a coloured band on the left
+        page.drawSvgPath(rrect(w, h, r), { x, y: Y(y0 + 2), color: C.shadow });
+        page.drawSvgPath(rrect(w, h, r), { x, y: Y(y0), color });
+        page.drawSvgPath(`M ${band} ${i} L ${w - r} ${i} Q ${w - i} ${i} ${w - i} ${r} L ${w - i} ${h - r} Q ${w - i} ${h - i} ${w - r} ${h - i} L ${band} ${h - i} Z`, { x, y: Y(y0), color: rgb(1, 1, 1) });
+        const isDec = s.type === "decision", ns = String(n), nsz = isDec ? (wide ? 9 : 8) : (wide ? 12 : 10);
+        const bcx = x + band / 2 + (round ? 1.5 : 0.5), bcy = y0 + h / 2;
+        if (isDec) { const d = wide ? 11.5 : 9.5; page.drawSvgPath(`M 0 ${-d} L ${d} 0 L 0 ${d} L ${-d} 0 Z`, { x: bcx, y: Y(bcy), borderColor: rgb(1, 1, 1), borderWidth: 1 }); }
+        page.drawText(ns, { x: bcx - bold.widthOfTextAtSize(ns, nsz) / 2, y: Y(bcy + nsz * 0.36), size: nsz, font: bold, color: rgb(1, 1, 1) });
+
+        const L = x + band + 10, innerR = x + w - (round ? 14 : 10);
         const tF = form.createDropdown(`step${n}_type`); tF.addOptions(typeNames); tF.select(TYPES[s.type] || "Step");
-        tF.addToPage(page, fo(L, y0 + 6, 70, 13, { textColor: color })); tF.setFontSize(7.5);
-        text("STEP " + String(n).padStart(2, "0"), L + 76, y0 + 16, 7, bold);
+        tF.addToPage(page, fo(L, y0 + 7, wide ? 66 : 58, 14, { textColor: color, backgroundColor: tint(color, 0.88) })); tF.setFontSize(7.5);
         const startTxt = s.blank ? "" : "+" + fmt(st[s.id] || 0);
+        const durTxt = s.dur === "" || s.dur == null ? "" : pdfSafe(s.dur);
         if (wide) {
-          const R = innerR - 124, fw = R - 10 - L;
-          const nF = form.createTextField(`step${n}_name`); nF.setText(pdfSafe(s.name)); nF.addToPage(page, fo(L, y0 + 24, fw, 18)); nF.setFontSize(10.5);
-          const dF = form.createTextField(`step${n}_notes`); dF.enableMultiline(); dF.setText(pdfSafe(s.desc)); dF.addToPage(page, fo(L, y0 + 46, fw, 24)); dF.setFontSize(8);
-          text("DURATION", R, y0 + 16, 7, bold);
-          const du = form.createTextField(`step${n}_duration`); du.setText(s.dur === "" || s.dur == null ? "" : pdfSafe(s.dur)); du.addToPage(page, fo(R, y0 + 22, 62, 20)); du.setFontSize(11);
+          const R = innerR - 124, fw = R - 12 - L;
+          const nF = form.createTextField(`step${n}_name`); nF.setText(pdfSafe(s.name)); nF.addToPage(page, fo(L, y0 + 26, fw, 18)); nF.setFontSize(10.5); boldFields.push(nF);
+          const dF = form.createTextField(`step${n}_notes`); dF.enableMultiline(); dF.setText(pdfSafe(s.desc)); dF.addToPage(page, fo(L, y0 + 48, fw, 22)); dF.setFontSize(8);
+          text("DURATION", R, y0 + 17, 6.5, bold);
+          const du = form.createTextField(`step${n}_duration`); du.setText(durTxt); du.addToPage(page, fo(R, y0 + 22, 62, 20)); du.setFontSize(11);
           const un = form.createDropdown(`step${n}_unit`); un.addOptions(units); un.select(UNIT_LABEL[s.unit] || "min"); un.addToPage(page, fo(R + 66, y0 + 22, 58, 20)); un.setFontSize(9);
-          text("STARTS", R, y0 + 54, 7, bold);
-          const sF = form.createTextField(`step${n}_starts`); sF.setText(startTxt); sF.addToPage(page, fo(R + 34, y0 + 46, 90, 14)); sF.setFontSize(8);
+          text("STARTS", R, y0 + 58, 6.5, bold);
+          const sF = form.createTextField(`step${n}_starts`); sF.setText(startTxt); sF.addToPage(page, fo(R + 34, y0 + 48, 90, 14)); sF.setFontSize(8);
         } else {
           const fw = innerR - L;
-          const nF = form.createTextField(`step${n}_name`); nF.setText(pdfSafe(s.name)); nF.addToPage(page, fo(L, y0 + 24, fw, 18)); nF.setFontSize(10);
-          const dF = form.createTextField(`step${n}_notes`); dF.enableMultiline(); dF.setText(pdfSafe(s.desc)); dF.addToPage(page, fo(L, y0 + 46, fw, 22)); dF.setFontSize(7.5);
-          const du = form.createTextField(`step${n}_duration`); du.setText(s.dur === "" || s.dur == null ? "" : pdfSafe(s.dur)); du.addToPage(page, fo(L, y0 + 74, 44, 18)); du.setFontSize(10);
-          const un = form.createDropdown(`step${n}_unit`); un.addOptions(units); un.select(UNIT_LABEL[s.unit] || "min"); un.addToPage(page, fo(L + 48, y0 + 74, 46, 18)); un.setFontSize(8.5);
-          text("STARTS", L + 100, y0 + 86, 6.5, bold);
-          const sF = form.createTextField(`step${n}_starts`); sF.setText(startTxt); sF.addToPage(page, fo(L + 128, y0 + 76, Math.max(30, fw - 128), 14)); sF.setFontSize(7.5);
+          text("STARTS", L + 64, y0 + 16.5, 6, bold);
+          const sF = form.createTextField(`step${n}_starts`); sF.setText(startTxt); sF.addToPage(page, fo(L + 90, y0 + 7, fw - 90, 14)); sF.setFontSize(7.5);
+          const nF = form.createTextField(`step${n}_name`); nF.setText(pdfSafe(s.name)); nF.addToPage(page, fo(L, y0 + 26, fw, 18)); nF.setFontSize(9.5); boldFields.push(nF);
+          const dF = form.createTextField(`step${n}_notes`); dF.enableMultiline(); dF.setText(pdfSafe(s.desc)); dF.addToPage(page, fo(L, y0 + 48, fw, 22)); dF.setFontSize(7.5);
+          text("DURATION", L, y0 + 87, 6, bold);
+          const du = form.createTextField(`step${n}_duration`); du.setText(durTxt); du.addToPage(page, fo(L + 40, y0 + 75, 46, 18)); du.setFontSize(10);
+          const un = form.createDropdown(`step${n}_unit`); un.addOptions(units); un.select(UNIT_LABEL[s.unit] || "min"); un.addToPage(page, fo(L + 90, y0 + 75, 50, 18)); un.setFontSize(8.5);
         }
         if (target) {
           const t = allSteps.find(z => z.id === s.noTarget);
           const ty = y0 + h - 22;
-          text("IF " + pdfSafe(s.no || "No").toUpperCase().slice(0, 12) + ", GO TO", L, ty + 10, 6.5, bold);
+          text("IF " + pdfSafe(s.no || "No").toUpperCase().slice(0, 12) + ", GO TO", L, ty + 10, 6.5, bold, C.decision);
           const bF = form.createTextField(`step${n}_branch`); bF.setText(t ? "Step " + num[t.id] + ": " + pdfSafe(t.name) : "");
           bF.addToPage(page, fo(L + 70, ty, innerR - L - 70, 14)); bF.setFontSize(7.5);
         }
@@ -603,7 +611,8 @@
           vline(c, y0 + 6, y0 + 12);
           const lw = Math.min(90, b - 10);
           const lf = form.createTextField(`split${sIdx}_chain${k + 1}_label`); lf.setText(pdfSafe(it.labels[k] || "Path " + letter(k)).toUpperCase());
-          lf.addToPage(page, fo(c - lw / 2, y0 + 12, lw, 12, { textColor: C.muted, backgroundColor: rgb(1, 1, 1) })); lf.setFontSize(7); lf.setAlignment(1);
+          page.drawSvgPath(rrect(lw, 13, 6.5), { x: c - lw / 2, y: Y(y0 + 11.5), color: rgb(1, 1, 1), borderColor: C.conn, borderWidth: 0.8 });
+          lf.addToPage(page, fo(c - lw / 2 + 5, y0 + 12, lw - 10, 12, { textColor: C.muted, backgroundColor: rgb(1, 1, 1) })); lf.setFontSize(7); lf.setAlignment(1); boldFields.push(lf);
           vline(c, y0 + 24, y0 + FORK - 2); arrow(c, y0 + FORK);
           let end;
           if (br.length) end = drawSeq(br, c - b / 2, bodyTop, b);
@@ -631,9 +640,19 @@
           }
         }
       });
-      text(`Page ${p + 1} of ${pagesPlan.length}`, W - M - 50, H - 22, 7.5);
+      // Footer: legend and page number
+      page.drawLine({ start: { x: M, y: 38 }, end: { x: W - M, y: 38 }, thickness: 0.6, color: C.line });
+      let lx = M;
+      Object.keys(TYPES).forEach(k => {
+        page.drawCircle({ x: lx + 3, y: 26.5, size: 3, color: C[k] });
+        text(TYPES[k], lx + 10, H - 24, 7);
+        lx += 10 + font.widthOfTextAtSize(TYPES[k], 7) + 14;
+      });
+      const pn = `Page ${p + 1} of ${pagesPlan.length}`;
+      text(pn, W - M - font.widthOfTextAtSize(pn, 7), H - 24, 7);
     }
     form.updateFieldAppearances(font);
+    boldFields.forEach(fl => fl.updateAppearances(bold));
     return doc.save();
   }
 
