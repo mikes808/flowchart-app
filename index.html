@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flowcharts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Shown until config.js has the Supabase values -->
+<div class="page" id="view-setup" hidden>
+  <span class="brand">Flowcharts</span>
+  <h1>One more step: connect the database</h1>
+  <p class="lead" id="setupMsg">This app needs a free Supabase project to handle sign-in and store everyone's flowcharts.</p>
+  <div class="card">
+    <ol class="steps">
+      <li>Create a free project at supabase.com.</li>
+      <li>Run <code>supabase/schema.sql</code> in the project's SQL Editor.</li>
+      <li>Paste the Project URL and Publishable key into <code>config.js</code> in this repository.</li>
+    </ol>
+    <p class="note">Full instructions are in <code>SETUP.md</code> in the repository.</p>
+  </div>
+</div>
+
+<div class="page narrow" id="view-auth" hidden>
+  <span class="brand">Flowcharts</span>
+  <h1 id="authTitle">Sign in</h1>
+  <form class="card form" id="authForm" novalidate>
+    <label id="emailWrap">Email<input type="email" id="authEmail" autocomplete="email" required></label>
+    <label id="passWrap"><span id="passLabel">Password</span><input type="password" id="authPass" autocomplete="current-password" minlength="6" required></label>
+    <button class="btn primary" id="authSubmit" type="submit">Sign in</button>
+    <p class="msg" id="authMsg" role="status"></p>
+    <div class="switch">
+      <button class="linkbtn" id="authSwitch" type="button">Create an account</button>
+      <button class="linkbtn" id="authForgot" type="button">Forgot password?</button>
+    </div>
+  </form>
+</div>
+
+<div class="page" id="view-list" hidden>
+  <div class="topbar">
+    <span class="brand">Flowcharts</span>
+    <span class="who"><span id="whoEmail"></span><button class="btn small" id="signOut" type="button">Sign out</button></span>
+  </div>
+  <h1>Your flowcharts</h1>
+  <div class="newrow">
+    <button class="btn primary" id="newBlank" type="button">+ New flowchart</button>
+    <button class="btn" id="newExample" type="button">+ New from example</button>
+    <span class="msg" id="listMsg" role="status"></span>
+  </div>
+  <div class="charts" id="myCharts"></div>
+  <h2 id="sharedHead" hidden>Shared with me</h2>
+  <div class="charts" id="sharedCharts"></div>
+</div>
+
+<div id="view-editor" hidden>
+<div class="wrap">
+  <div class="appbar">
+    <button class="btn" id="backBtn" type="button">&larr; All flowcharts</button>
+    <span class="pill" id="rolePill" hidden></span>
+    <span class="status" id="saveStatus" role="status"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="shareBtn" type="button" hidden>Share</button>
+  </div>
+  <div class="banner" id="conflict" hidden>
+    <span>This flowchart was changed somewhere else, so your latest edits were not saved.</span>
+    <button class="btn" id="conflictReload" type="button">Load the latest version</button>
+    <button class="btn" id="conflictKeep" type="button">Overwrite with my version</button>
+  </div>
+  <header>
+    <div class="title-block">
+      <input id="chartTitle" aria-label="Flowchart title" value="New Customer Onboarding">
+      <p class="hint">Click any text to edit it and set a duration on each step. Use <b>Branch</b> on a step to start a second chain from it, then pick where the chains rejoin. Use + between steps to insert one.</p>
+    </div>
+    <div class="summary">
+      <div class="tile proj"><div class="k">Projected completion</div><div class="v" id="projDate">-</div><div class="sub" id="projWin"></div></div>
+      <div class="tile"><div class="k">Longest path</div><div class="v" id="totTime">0m</div></div>
+      <div class="tile"><div class="k">Steps</div><div class="v" id="totSteps">0</div></div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <button class="btn" id="addEnd" type="button">+ Add step</button>
+    <button class="btn primary" id="exportPdf" type="button">Export fillable PDF</button>
+    <label class="chk"><input type="checkbox" id="blankSlots" checked> Add 3 blank steps to the PDF</label>
+    <button class="btn" id="copyText" type="button">Copy as text</button>
+    <span class="toast" id="toast" role="status"></span>
+    <span class="spacer"></span>
+    <div class="legend" aria-label="Shape legend">
+      <span><i style="background:var(--start)"></i>Start</span>
+      <span><i style="background:var(--accent)"></i>Step</span>
+      <span><i style="background:var(--decision)"></i>Decision</span>
+      <span><i style="background:var(--wait)"></i>Wait</span>
+      <span><i style="background:var(--end)"></i>End</span>
+    </div>
+  </div>
+
+  <main class="flow" id="flow" aria-label="Flowchart steps"></main>
+</div>
+
+<div class="fab">
+  <span class="where" id="fabWhere" aria-live="polite">Adds at the end</span>
+  <button id="fabAdd" type="button" aria-describedby="fabWhere"><span class="plus" aria-hidden="true">+</span>Add step</button>
+</div>
+
+<div class="dialog-back" id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgText">
+  <div class="dialog">
+    <p id="dlgText">Replace this flowchart with the example template? Your edits will be lost.</p>
+    <div class="btns">
+      <button class="btn" id="dlgNo" type="button">Cancel</button>
+      <button class="btn primary" id="dlgYes" type="button">Reset</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- App dialogs -->
+<div class="dialog-back" id="confirmDlg" role="dialog" aria-modal="true" aria-labelledby="confirmText">
+  <div class="dialog">
+    <p id="confirmText"></p>
+    <div class="btns">
+      <button class="btn" id="confirmNo" type="button">Cancel</button>
+      <button class="btn primary" id="confirmYes" type="button">OK</button>
+    </div>
+  </div>
+</div>
+<div class="dialog-back" id="shareDlg" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+  <div class="dialog wide">
+    <h3 id="shareTitle">Share this flowchart</h3>
+    <form class="shareadd" id="shareForm" novalidate>
+      <input type="email" id="shareEmail" placeholder="Email address" aria-label="Email address to share with" required>
+      <select id="shareRole" aria-label="Access level"><option value="viewer">Can view</option><option value="editor">Can edit</option></select>
+      <button class="btn primary" type="submit">Add</button>
+    </form>
+    <p class="msg" id="shareMsg" role="status"></p>
+    <div class="sharelist" id="shareList"></div>
+    <p class="note">No email is sent. Tell the person to sign in here with this exact email address; the flowchart will be under "Shared with me".</p>
+    <div class="btns"><button class="btn" id="shareClose" type="button">Done</button></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script src="editor.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
