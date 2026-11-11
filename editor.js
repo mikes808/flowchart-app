@@ -253,7 +253,7 @@
   }
   function autosize(el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
   function focusField(id, f) { const el = flow.querySelector(`.node[data-id="${id}"] [data-f="${f}"]`); if (el) el.focus(); }
-  const newStep = () => mk("step", "", "", 30, "min");
+  const newStep = () => mk("step", "", "", 1, "wk");
 
   // ---------- Editing ----------
   flow.addEventListener("change", e => {
@@ -703,7 +703,7 @@
     blank() {
       uid = 1;
       return withDefaults({ title: "Untitled flowchart", items: [
-        mk("start", "Start", "", 0, "min"), mk("step", "First step", "", 30, "min"), mk("end", "Finish", "", 0, "min")] });
+        mk("start", "Start", "", 0, "min"), mk("step", "First step", "", 1, "wk"), mk("end", "Finish", "", 0, "min")] });
     },
     toast,
     // test hooks
