@@ -88,6 +88,14 @@ button, select, input, textarea { font-family: inherit; font-size: 14px; color: 
 .typeSel { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--c); background: transparent; border: none; padding: 0; cursor: pointer; font-weight: 600; }
 .stepno, .starts { font-family: var(--font-mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .starts { margin-left: auto; }
+.pinwrap { display: inline-flex; align-items: center; gap: 2px; }
+.pindate { font-family: var(--font-mono); font-size: 11px; color: var(--muted); border: 1px solid transparent; border-radius: 4px; background: transparent; padding: 0 2px; cursor: pointer; }
+.pindate:hover { border-color: var(--line); }
+.pindate:focus { outline: none; border-color: var(--accent); background: var(--bg); color: var(--ink); }
+.pinwrap.pinned .pindate { color: var(--accent); font-weight: 600; background: var(--bg); border-color: var(--line); }
+.pinwrap.warn .pindate { color: var(--decision); border-color: var(--decision); }
+.icon.unpin { min-width: 20px; height: 18px; font-size: 11px; }
+body.readonly .icon.unpin { display: none; }
 .field { border: 1px solid transparent; border-radius: 4px; background: transparent; padding: 2px 4px; margin-left: -5px; width: 100%; font-family: inherit; color: var(--ink); resize: none; }
 .field:hover { border-color: var(--line); }
 .field:focus { outline: none; border-color: var(--accent); background: var(--bg); }

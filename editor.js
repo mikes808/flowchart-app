@@ -61,6 +61,35 @@
     return t;
   }
 
+  // A step with a date set by hand (s.pin = "YYYY-MM-DD") starts on that date;
+  // everything after it follows from there.
+  const dateISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  function computeSchedule(itemsArg) {
+    const s0 = startMoment(); if (!s0) return null;
+    const cal = calendar();
+    const [hh, mi] = (state.startTime || "09:00").split(":").map(Number);
+    const pinDate = pin => { const [y, m, d] = pin.split("-").map(Number); return new Date(y, m - 1, d, hh || 0, mi || 0); };
+    const warn = {};
+    function run(items, cur, agg, at) {
+      for (const it of items) {
+        if (isSplit(it)) {
+          const ends = it.branches.map(b => run(b, new Date(cur), agg, at));
+          cur = new Date((agg === "min" ? Math.min : Math.max)(...ends.map(d => d.getTime())));
+        } else {
+          let st = cal.add(cur, 0, true);
+          if (it.pin && /^\d{4}-\d{2}-\d{2}$/.test(it.pin)) { const pd = cal.add(pinDate(it.pin), 0, true); if (agg === "max" && pd < st) warn[it.id] = true; st = pd; }
+          at[it.id] = st; cur = cal.add(st, minutes(it));
+        }
+      }
+      return cur;
+    }
+    const start = cal.add(s0, 0, true);
+    const at = {}; const late = run(itemsArg, start, "max", at);
+    const early = run(itemsArg, start, "min", {});
+    const offs = {}; for (const k in at) offs[k] = cal.diffMins(start, at[k]);
+    return { at, offs, warn, start, late, early };
+  }
+
   // ---------- Calendar ----------
   // Work time runs on a working calendar: 8-hour days from the chosen start time, weekdays only unless weekends count.
   const DAY = 480;
@@ -90,22 +119,25 @@
       if (forStart && c >= dayEnd(c)) c = nextDay(c);
       return c;
     }
-    return { add };
+    // Working minutes from a to b on this calendar.
+    function diffMins(a, b) {
+      let c = norm(new Date(a)); if (b <= c) return 0;
+      let m = 0, guard = 0;
+      while (dayEnd(c) < b && guard++ < 20000) { m += (dayEnd(c) - c) / 60000; c = nextDay(c); }
+      return Math.round(m + Math.max(0, (b - c) / 60000));
+    }
+    return { add, diffMins };
   }
   const sameYear = d => d.getFullYear() === new Date().getFullYear();
   const fmtDate = (d, long) => d.toLocaleDateString(undefined, Object.assign({ month: "short", day: "numeric" }, long ? { weekday: "short" } : {}, sameYear(d) ? {} : { year: "numeric" }));
   const fmtTime = d => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  function startsText(id) {
-    const base = "starts +" + fmt(times[id] || 0);
-    const s0 = startMoment(); if (!s0) return base;
-    return base + " \u00b7 " + fmtDate(calendar().add(s0, times[id] || 0, true), true);
+  let sched = null;
+  function startsText(id, offsetOnly) {
+    if (!sched || !sched.at[id]) return "starts +" + fmt(times[id] || 0);
+    const base = "starts +" + fmt(sched.offs[id] || 0);
+    return offsetOnly ? base + " \u00b7" : base + " \u00b7 " + fmtDate(sched.at[id], true);
   }
-  function projection(total) {
-    const s0 = startMoment();
-    if (!s0) return null;
-    const cal = calendar(), late = cal.add(s0, total), early = cal.add(s0, computeMin(state.items, 0));
-    return { early, late, start: cal.add(s0, 0, true) };
-  }
+  function projection() { return sched; }
   function updateProjection(total) {
     const pd = document.getElementById("projDate"), pw = document.getElementById("projWin");
     const pr = projection(total);
@@ -142,6 +174,7 @@
   function render() {
     document.getElementById("chartTitle").value = state.title;
     times = {}; const total = computeTimes(state.items, 0, times);
+    sched = computeSchedule(state.items);
     const n = numbering(state.items); nums = n.map;
     flow.innerHTML = `<div class="seq top">${seqHtml(state.items)}</div>`;
     flow.querySelectorAll("textarea").forEach(autosize);
@@ -154,7 +187,17 @@
   }
   function refreshTimes() {
     times = {}; const total = computeTimes(state.items, 0, times);
-    flow.querySelectorAll(".node").forEach(el => { const s = el.querySelector(".starts"); if (s) s.textContent = startsText(+el.dataset.id); });
+    sched = computeSchedule(state.items);
+    flow.querySelectorAll(".node").forEach(el => {
+      const id = +el.dataset.id, s = el.querySelector(".starts");
+      const wrap = el.querySelector(".pinwrap"), inp = el.querySelector(".pindate");
+      if (s) s.textContent = startsText(id, !!inp);
+      if (wrap && inp && sched && sched.at[id]) {
+        if (document.activeElement !== inp) inp.value = dateISO(sched.at[id]);
+        wrap.classList.toggle("warn", !!sched.warn[id]);
+        wrap.title = sched.warn[id] ? "Starts before the previous step finishes" : "";
+      }
+    });
     document.getElementById("totTime").textContent = fmt(total);
     updateProjection(total);
   }
@@ -197,11 +240,13 @@
         <span class="fin">Projected finish: <b id="finInStart"></b></span>
       </div>`;
     }
+    const showPin = sched && sched.at[s.id] && !(fs && fs.id === s.id);
+    const dateCtl = showPin ? `<span class="pinwrap${s.pin ? " pinned" : ""}${sched.warn[s.id] ? " warn" : ""}"${sched.warn[s.id] ? ' title="Starts before the previous step finishes"' : ""}><input type="date" class="pindate" data-f="pin" id="pin${s.id}" value="${dateISO(sched.at[s.id])}" aria-label="Start date for step ${n}">${s.pin ? `<button class="icon unpin" data-a="unpin" type="button" title="Back to the automatic date" aria-label="Use the automatic start date for step ${n}">&#8634;</button>` : ""}</span>` : "";
     return `<div class="item"><section class="node" data-type="${s.type}" data-id="${s.id}" aria-label="Step ${n}">
       <div class="main">
         <div class="typeline"><span class="stepno">${String(n).padStart(2, "0")}</span>
           <select class="typeSel" data-f="type" aria-label="Shape type for step ${n}">${opts}</select>
-          <span class="starts">${esc(startsText(s.id))}</span></div>
+          <span class="starts">${esc(startsText(s.id, showPin))}</span>${dateCtl}</div>
         <input class="field name" data-f="name" id="n${s.id}" aria-label="Step ${n} name" value="${esc(s.name)}" placeholder="Step name">
         <textarea class="field desc" data-f="desc" id="d${s.id}" rows="1" aria-label="Step ${n} notes" placeholder="Add notes (optional)">${esc(s.desc)}</textarea>
       </div>
@@ -260,7 +305,9 @@
     const g = e.target.dataset.g;
     if (!g) return;
     state[g] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
-    save(); refreshTimes();
+    save();
+    const gid = e.target.id; render();
+    const el = gid && document.getElementById(gid); if (el) el.focus();
   });
   flow.addEventListener("input", e => {
     if (e.target.dataset.g && e.target.type !== "checkbox") { state[e.target.dataset.g] = e.target.value; save(); refreshTimes(); return; }
@@ -270,7 +317,7 @@
     if (f === "label" && col) { const sp = locate(+col.dataset.split).item; sp.labels[+col.dataset.bi] = e.target.value; save(); return; }
     if (!node) return;
     const s = locate(+node.dataset.id).item;
-    if (f === "type" || f === "unit" || f === "noTarget" || f === "rejoin") return;
+    if (f === "type" || f === "unit" || f === "noTarget" || f === "rejoin" || f === "pin") return;
     s[f] = e.target.value;
     if (e.target.tagName === "TEXTAREA") autosize(e.target);
     if (f === "dur") refreshTimes();
@@ -284,6 +331,13 @@
     const node = e.target.closest(".node");
     if (!f || !node) return;
     const s = locate(+node.dataset.id).item;
+    if (f === "pin") {
+      const v = e.target.value;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) s.pin = v; else delete s.pin;
+      save(); render();
+      const el = document.getElementById("pin" + s.id); if (el) el.focus();
+      return;
+    }
     if (f === "type") { s.type = e.target.value; if (s.type === "decision" && !s.yes) { s.yes = "Yes"; s.no = "No"; s.noTarget = null; } save(); render(); focusField(s.id, "type"); }
     else if (f === "unit") { s.unit = e.target.value; refreshTimes(); save(); }
     else if (f === "noTarget") { s.noTarget = e.target.value ? +e.target.value : null; save(); }
@@ -345,6 +399,7 @@
       if (isSplit(seq[i + 1]) && !seq[i + 1].merge) { toast("Set this split to rejoin before moving a step below it."); return; }
       [seq[i + 1], seq[i]] = [seq[i], seq[i + 1]];
     } else if (a === "dup") seq.splice(i + 1, 0, Object.assign({}, item, { id: uid++ }));
+    else if (a === "unpin") delete item.pin;
     else if (a === "del") { seq.splice(i, 1); walk(state.items, it => { if (it.noTarget === id) it.noTarget = null; }); }
     else return;
     save(); render();
@@ -394,7 +449,7 @@
 
   // ---------- Copy as text ----------
   document.getElementById("copyText").addEventListener("click", async () => {
-    times = {}; const total = computeTimes(state.items, 0, times); nums = numbering(state.items).map;
+    times = {}; const total = computeTimes(state.items, 0, times); sched = computeSchedule(state.items); nums = numbering(state.items).map;
     const lines = [state.title, "Longest path: " + fmt(total)];
     const pr = projection(total);
     if (pr) {
@@ -409,7 +464,7 @@
         it.branches.forEach((b, bi) => { lines.push(`${ind}  Chain ${letter(bi)} (${it.labels[bi] || "Path " + letter(bi)}):`); if (b.length) out(b, ind + "    "); else lines.push(ind + "    (direct path)"); });
         lines.push(ind + (it.merge ? "Chains rejoin here." : "Chains do not rejoin."));
       } else {
-        let line = `${ind}${nums[it.id]}. [${TYPES[it.type]}] ${it.name || "Untitled"} (${it.dur || 0} ${UNIT_LABEL[it.unit]}; starts +${fmt(times[it.id])})`;
+        let line = `${ind}${nums[it.id]}. [${TYPES[it.type]}] ${it.name || "Untitled"} (${it.dur || 0} ${UNIT_LABEL[it.unit]}; ${startsText(it.id)}${it.pin ? " - date set by hand" : ""})`;
         if (it.desc) line += `\n${ind}   ${it.desc}`;
         if (it.type === "decision" && !isSplit(items[i + 1]) && it.noTarget) { const r = locate(it.noTarget); if (r) line += `\n${ind}   ${it.yes || "Yes"} -> next step; ${it.no || "No"} -> step ${nums[it.noTarget]}`; }
         lines.push(line);
@@ -464,6 +519,7 @@
       if (last && !isSplit(last) && last.type === "end") seq.splice(seq.length - 1, 0, ...blanks); else seq.push(...blanks);
     }
     const st = {}; const total = computeTimes(items, 0, st);
+    const schedPdf = computeSchedule(items);
     const { map: num, list: allSteps } = numbering(items);
 
     const M = 40, GAP = 22, GAPX = 14, MINBOX = 196, FORK = 40, JOIN = 14, DIRECT = 26;
@@ -516,7 +572,7 @@
         tf.addToPage(page, fo(M - 3, y + 17, contentW + 6, 30, { backgroundColor: rgb(1, 1, 1) })); tf.setFontSize(20); boldFields.push(tf);
         page.drawRectangle({ x: M, y: Y(y + 54), width: 36, height: 2.5, color: C.step });
         // Summary cards
-        const pr = (() => { const s0 = startMoment(); if (!s0) return null; const cal = calendar(); return { start: cal.add(s0, 0, true), late: cal.add(s0, total), early: cal.add(s0, computeMin(items, 0)) }; })();
+        const pr = schedPdf;
         const cards = [
           ["START", "start_date", pr ? fmtDate(pr.start, true) + ", " + fmtTime(pr.start) : "", false],
           ["PROJECTED COMPLETION", "projected_completion", pr ? fmtDate(pr.late, true) + ", " + fmtTime(pr.late) : "", true],
@@ -551,7 +607,7 @@
         const L = x + band + 10, innerR = x + w - (round ? 14 : 10);
         const tF = form.createDropdown(`step${n}_type`); tF.addOptions(typeNames); tF.select(TYPES[s.type] || "Step");
         tF.addToPage(page, fo(L, y0 + 7, wide ? 66 : 58, 14, { textColor: color, backgroundColor: tint(color, 0.88) })); tF.setFontSize(7.5);
-        const startTxt = s.blank ? "" : "+" + fmt(st[s.id] || 0);
+        const startTxt = s.blank ? "" : schedPdf && schedPdf.at[s.id] ? fmtDate(schedPdf.at[s.id], true) + (s.pin ? " (set)" : "") : "+" + fmt(st[s.id] || 0);
         const durTxt = s.dur === "" || s.dur == null ? "" : pdfSafe(s.dur);
         if (wide) {
           const R = innerR - 124, fw = R - 12 - L;
