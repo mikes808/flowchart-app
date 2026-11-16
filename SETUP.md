@@ -54,3 +54,9 @@ Open the site, click **Create an account**, confirm your email from the link Sup
 The owner of a chart clicks **Share** and adds an email address as "Can view" or "Can edit". No email is sent. When that person signs in with that address, the chart appears under "Shared with me". Only the owner can share or delete a chart.
 
 If two people edit the same chart at once, the second save is stopped and that person chooses between loading the latest version and overwriting it. Edits do not appear live in the other person's window.
+
+## Version history
+
+Each flowchart keeps earlier versions. The database saves the previous version automatically, at most once every 10 minutes while a chart is being edited, and keeps the newest 60 per chart. Owners and people who can edit open **History** on a chart to save a version by hand or restore one. Restoring keeps the current chart as a version first.
+
+If you set up the database before this feature existed, run `supabase/schema.sql` again in the SQL Editor. It adds the history table and keeps your charts.

@@ -46,7 +46,7 @@
   function closeConfirm(v) { $("confirmDlg").classList.remove("open"); if (confirmResolve) { confirmResolve(v); confirmResolve = null; } }
   $("confirmYes").addEventListener("click", () => closeConfirm(true));
   $("confirmNo").addEventListener("click", () => closeConfirm(false));
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { closeConfirm(false); $("shareDlg").classList.remove("open"); } });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { closeConfirm(false); $("shareDlg").classList.remove("open"); $("histDlg").classList.remove("open"); } });
 
   // ---------- Sign in / sign up / reset ----------
   let authMode = "signin"; // signin | signup | forgot | newpass
@@ -234,6 +234,7 @@
     FlowEditor.load(data, { readOnly: role === "viewer" });
     document.title = (row.title || "Untitled flowchart") + " · Flowcharts";
     $("shareBtn").hidden = role !== "owner";
+    $("historyBtn").hidden = role === "viewer";
     const pill = $("rolePill");
     pill.hidden = role === "owner";
     pill.textContent = role === "editor" ? "Shared by " + row.owner_email + " · can edit" : "View only · shared by " + row.owner_email;
@@ -298,11 +299,65 @@
     while (saving) await sleep(50);
     if (dirty && !conflict) await saveNow();
     current = null; dirty = false; conflict = false;
-    $("shareDlg").classList.remove("open");
+    $("shareDlg").classList.remove("open"); $("histDlg").classList.remove("open");
   }
   $("backBtn").addEventListener("click", () => go(""));
   window.addEventListener("beforeunload", e => { if (current && (dirty || saving)) { e.preventDefault(); e.returnValue = ""; } });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveNow(); });
+
+  // ---------- Version history ----------
+  // The database keeps the previous version automatically (about every 10 minutes of editing);
+  // this is the list, the "save now" button and restore.
+  const KIND = { auto: "Saved automatically", manual: "Saved by hand", restore: "Kept before a restore" };
+  const whenText = t => new Date(t).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  function histMsg(t, err) { const m = $("histMsg"); m.textContent = t || ""; m.classList.toggle("err", !!err); }
+  const histMissing = e => /does not exist|schema cache|PGRST205|42P01/i.test((e.code || "") + " " + (e.message || ""));
+  async function flush() { while (saving) await sleep(50); if (dirty && !conflict) await saveNow(); while (saving) await sleep(50); }
+  async function loadHistory() {
+    const id = current && current.id; if (!id) return;
+    const { data, error } = await sb.from("chart_versions").select("id,title,saved_by,kind,as_of").eq("chart_id", id).order("as_of", { ascending: false }).limit(60);
+    if (!current || current.id !== id) return;
+    if (error) { histMsg(histMissing(error) ? "Version history isn't set up yet. Run the latest supabase/schema.sql in your Supabase project, then reload." : "Couldn't load versions: " + error.message, true); return; }
+    $("histList").replaceChildren(...(data.length ? data.map(v =>
+      h("div", { class: "histrow" },
+        h("div", { class: "hi" },
+          h("span", { class: "hw" }, whenText(v.as_of)),
+          h("span", { class: "hm" }, (KIND[v.kind] || "Saved") + (v.saved_by ? " · last edited by " + v.saved_by : "") + " · " + (v.title || "Untitled flowchart"))),
+        h("button", { class: "btn small", type: "button", onclick: () => restoreVersion(v) }, "Restore"))
+    ) : [h("p", { class: "histnote" }, "No earlier versions yet. They appear here as the flowchart is edited.")]));
+  }
+  $("historyBtn").addEventListener("click", async () => {
+    histMsg(""); $("histList").replaceChildren(); $("histDlg").classList.add("open"); $("histClose").focus();
+    await flush(); loadHistory();
+  });
+  $("histClose").addEventListener("click", () => $("histDlg").classList.remove("open"));
+  async function keepCurrent(kind) {
+    const data = FlowEditor.getData();
+    return sb.from("chart_versions").insert({ chart_id: current.id, title: (data.title || "").trim() || "Untitled flowchart", data, kind });
+  }
+  $("histSave").addEventListener("click", async () => {
+    if (!current) return;
+    await flush();
+    const { error } = await keepCurrent("manual");
+    histMsg(error ? "Couldn't save a version: " + error.message : "Version saved.", !!error);
+    if (!error) loadHistory();
+  });
+  async function restoreVersion(v) {
+    if (!current) return;
+    if (conflict) return histMsg("Sort out the unsaved-changes notice on the flowchart first, then restore.", true);
+    await flush();
+    const c = current;
+    const { data: full, error } = await sb.from("chart_versions").select("title,data").eq("id", v.id).maybeSingle();
+    if (error || !full) return histMsg("Couldn't open that version" + (error ? ": " + error.message : "."), true);
+    const kept = await keepCurrent("restore");
+    if (kept.error) return histMsg("Couldn't keep the current flowchart as a version, so nothing was restored: " + kept.error.message, true);
+    if (current !== c) return;
+    FlowEditor.load(Object.assign({}, full.data, { title: full.title }), { readOnly: false });
+    dirty = true; await saveNow();
+    $("histDlg").classList.remove("open");
+    if (conflict) return;
+    FlowEditor.toast("Restored the version from " + whenText(v.as_of) + ".");
+  }
 
   // ---------- Sharing ----------
   function shareMsg(t, err) { const m = $("shareMsg"); m.textContent = t || ""; m.className = "msg " + (err ? "err" : "ok"); }

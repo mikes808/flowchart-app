@@ -27,6 +27,21 @@ create table if not exists public.chart_shares (
 );
 create index if not exists chart_shares_email_idx on public.chart_shares (email);
 
+alter table public.charts add column if not exists updated_by text;
+
+-- Earlier versions of each chart. as_of = when that version was the current one.
+create table if not exists public.chart_versions (
+  id        uuid primary key default gen_random_uuid(),
+  chart_id  uuid not null references public.charts (id) on delete cascade,
+  title     text not null default 'Untitled flowchart',
+  data      jsonb not null default '{}'::jsonb,
+  saved_by  text,
+  kind      text not null default 'manual' check (kind in ('auto', 'manual', 'restore')),
+  as_of     timestamptz not null default now(),
+  taken_at  timestamptz not null default now()
+);
+create index if not exists chart_versions_chart_idx on public.chart_versions (chart_id, taken_at desc);
+
 -- ---------- Helpers ----------
 -- The signed-in person's email, lowercased.
 create or replace function public.my_email() returns text
@@ -56,6 +71,14 @@ begin
   new.owner_email := old.owner_email;
   new.created_at := old.created_at;
   new.updated_at := now();
+  new.updated_by := public.my_email();
+  -- Keep the previous version, at most once every 10 minutes per chart.
+  if (new.data is distinct from old.data or new.title is distinct from old.title)
+     and not exists (select 1 from public.chart_versions v
+                     where v.chart_id = old.id and v.kind = 'auto' and v.taken_at > now() - interval '10 minutes') then
+    insert into public.chart_versions (chart_id, title, data, saved_by, kind, as_of)
+    values (old.id, old.title, old.data, coalesce(old.updated_by, old.owner_email), 'auto', old.updated_at);
+  end if;
   return new;
 end $$;
 drop trigger if exists charts_before_update on public.charts;
@@ -68,12 +91,42 @@ language plpgsql as $$
 begin
   new.owner := auth.uid();
   new.owner_email := public.my_email();
+  new.updated_by := public.my_email();
   new.version := 1;
   return new;
 end $$;
 drop trigger if exists charts_before_insert on public.charts;
 create trigger charts_before_insert before insert on public.charts
   for each row execute function public.charts_before_insert();
+
+-- Versions people save themselves are stamped with who and when.
+-- (Automatic ones come from the trigger above and keep the values it sets.)
+create or replace function public.versions_before_insert() returns trigger
+language plpgsql as $$
+begin
+  new.taken_at := now();
+  if pg_trigger_depth() <= 1 then
+    new.saved_by := public.my_email();
+    new.as_of := now();
+    if new.kind = 'auto' then new.kind := 'manual'; end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists versions_before_insert on public.chart_versions;
+create trigger versions_before_insert before insert on public.chart_versions
+  for each row execute function public.versions_before_insert();
+
+-- Keep the newest 60 versions of each chart.
+create or replace function public.versions_prune() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from chart_versions where id in (
+    select id from chart_versions where chart_id = new.chart_id order by taken_at desc, id offset 60);
+  return null;
+end $$;
+drop trigger if exists versions_prune on public.chart_versions;
+create trigger versions_prune after insert on public.chart_versions
+  for each row execute function public.versions_prune();
 
 -- Store share emails lowercased.
 create or replace function public.shares_normalize() returns trigger
@@ -128,5 +181,22 @@ create policy "owners remove shares, people leave" on public.chart_shares
   for delete to authenticated
   using (public.is_chart_owner(chart_id) or email = public.my_email());
 
+alter table public.chart_versions enable row level security;
+
+drop policy if exists "owners and editors see history" on public.chart_versions;
+create policy "owners and editors see history" on public.chart_versions
+  for select to authenticated
+  using (public.is_chart_owner(chart_id) or public.shared_role(chart_id) = 'editor');
+
+drop policy if exists "owners and editors save versions" on public.chart_versions;
+create policy "owners and editors save versions" on public.chart_versions
+  for insert to authenticated
+  with check (public.is_chart_owner(chart_id) or public.shared_role(chart_id) = 'editor');
+
+drop policy if exists "owners delete versions" on public.chart_versions;
+create policy "owners delete versions" on public.chart_versions
+  for delete to authenticated using (public.is_chart_owner(chart_id));
+
 grant select, insert, update, delete on public.charts, public.chart_shares to authenticated;
-revoke all on public.charts, public.chart_shares from anon;
+grant select, insert, delete on public.chart_versions to authenticated;
+revoke all on public.charts, public.chart_shares, public.chart_versions from anon;
