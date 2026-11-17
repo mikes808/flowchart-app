@@ -269,12 +269,21 @@
   }
 
   function rejoinOptions(sp, seq, i) {
-    const A = sp.branches[0], cont = sp.merge ? seq.slice(i + 1) : [];
-    const L = A.concat(cont);
-    let cur = !sp.merge ? "none" : (cont.length ? String(A.length) : "end");
+    const cont = sp.merge ? seq.slice(i + 1) : [];
+    const cur = !sp.merge ? "none" : (cont.length ? "c:0" : "end");
     const label = it => isSplit(it) ? "the next split" : `${nums[it.id]}. ${it.name || "Untitled"}`;
     let o = `<option value="none"${cur === "none" ? " selected" : ""}>Don't rejoin</option>`;
-    L.forEach((it, k) => { o += `<option value="${k}"${cur === String(k) ? " selected" : ""}>Rejoin before ${esc(label(it))}</option>`; });
+    sp.branches.forEach((b, bi) => {
+      if (!b.length) return;
+      o += `<optgroup label="In chain ${letter(bi)} - ${esc(sp.labels[bi] || "Path " + letter(bi))}">`;
+      b.forEach((it, k) => { o += `<option value="b${bi}:${k}">Rejoin before ${esc(label(it))}</option>`; });
+      o += `</optgroup>`;
+    });
+    if (cont.length) {
+      o += `<optgroup label="Shared steps below the split">`;
+      cont.forEach((it, k) => { o += `<option value="c:${k}"${cur === "c:" + k ? " selected" : ""}>Rejoin before ${esc(label(it))}</option>`; });
+      o += `</optgroup>`;
+    }
     o += `<option value="end"${cur === "end" ? " selected" : ""}>Rejoin after all chains end</option>`;
     return o;
   }
@@ -347,12 +356,20 @@
 
   function applyRejoin(splitId, v) {
     const { seq, i, item: sp } = locate(splitId);
-    const A = sp.branches[0];
     const cont = sp.merge ? seq.splice(i + 1) : [];
-    const L = A.concat(cont);
-    if (v === "none") { sp.branches[0] = L; sp.merge = false; }
-    else if (v === "end") { sp.branches[0] = L; sp.merge = true; }
-    else { const k = +v; sp.branches[0] = L.slice(0, k); sp.merge = true; seq.push(...L.slice(k)); }
+    if (v === "none") { sp.branches[0] = sp.branches[0].concat(cont); sp.merge = false; }
+    else if (v === "end") { sp.branches[0] = sp.branches[0].concat(cont); sp.merge = true; }
+    else if (v.indexOf("c:") === 0) {
+      // Boundary inside the shared steps: the ones above it join chain A.
+      const k = +v.slice(2);
+      sp.branches[0] = sp.branches[0].concat(cont.slice(0, k)); sp.merge = true; seq.push(...cont.slice(k));
+    } else {
+      // A step inside a chain: that chain keeps what is above it; it and the rest of its chain become shared.
+      const m = /^b(\d+):(\d+)$/.exec(v);
+      if (!m || !sp.branches[+m[1]]) { seq.push(...cont); save(); render(); return; }
+      const moved = sp.branches[+m[1]].splice(+m[2]);
+      sp.merge = true; seq.push(...moved, ...cont);
+    }
     save(); render();
     const sel = flow.querySelector(`#rj${splitId}`); if (sel) sel.focus();
   }
