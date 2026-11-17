@@ -35,7 +35,8 @@
     if (s.skipWeekends === undefined) s.skipWeekends = true;
     return s;
   }
-  function save() { if (readOnly) return; changeCbs.forEach(f => { try { f(); } catch (e) { console.error(e); } }); }
+  function persistOnly() { changeCbs.forEach(f => { try { f(); } catch (e) { console.error(e); } }); }
+  function save() { if (readOnly) return; trackUndo(); persistOnly(); }
 
   // ---------- Time ----------
   const minutes = s => (parseFloat(s.dur) || 0) * (UNITS[s.unit] || 1);
@@ -418,6 +419,49 @@
     toast(count === 1 ? "Moved to chain " + letter(to) + "." : "Moved " + count + " steps to chain " + letter(to) + ".");
   });
 
+  // ---------- Undo / redo ----------
+  const undoStack = [], redoStack = [];
+  let lastJson = null, lastPush = 0;
+  function updateUndoButtons() {
+    const u = document.getElementById("undoBtn"), r = document.getElementById("redoBtn");
+    if (u) u.disabled = !undoStack.length;
+    if (r) r.disabled = !redoStack.length;
+  }
+  function trackUndo() {
+    const next = JSON.stringify(state);
+    if (lastJson !== null && next !== lastJson) {
+      const now = Date.now();
+      // Quick bursts (typing) collapse into one undo step.
+      if (now - lastPush > 800 || !undoStack.length) { undoStack.push(lastJson); if (undoStack.length > 100) undoStack.shift(); }
+      lastPush = now;
+      redoStack.length = 0;
+    }
+    lastJson = next;
+    updateUndoButtons();
+  }
+  function applySnapshot(json) {
+    state = withDefaults(JSON.parse(json));
+    uid = maxId(state.items) + 1;
+    lastJson = json; lastPush = 0; picked = null;
+    persistOnly(); render(); updateUndoButtons();
+  }
+  function undo() { if (undoStack.length) { redoStack.push(JSON.stringify(state)); applySnapshot(undoStack.pop()); toast("Undone."); } }
+  function redo() { if (redoStack.length) { undoStack.push(JSON.stringify(state)); applySnapshot(redoStack.pop()); toast("Redone."); } }
+  document.getElementById("undoBtn").addEventListener("click", undo);
+  document.getElementById("redoBtn").addEventListener("click", redo);
+  document.addEventListener("keydown", e => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k !== "z" && k !== "y") return;
+    if (document.body.classList.contains("readonly")) return;
+    if (document.querySelector(".dialog-back.open")) return;
+    const t = e.target, tag = t && t.tagName;
+    // Inside a text box, leave the browser's own text undo alone; it syncs back to the chart.
+    if (tag === "TEXTAREA" || (tag === "INPUT" && ["text", "number", "email", "password", "search", ""].includes(t.type || ""))) return;
+    e.preventDefault();
+    if (k === "y" || e.shiftKey) redo(); else undo();
+  });
+
   flow.addEventListener("click", e => {
     const b = e.target.closest("button[data-a]");
     if (!b) return;
@@ -790,7 +834,9 @@
       readOnly = !!(opts && opts.readOnly);
       document.body.classList.toggle("readonly", readOnly);
       picked = null;
+      undoStack.length = 0; redoStack.length = 0; lastJson = JSON.stringify(state); lastPush = 0;
       render();
+      updateUndoButtons();
     },
     getData() { return JSON.parse(JSON.stringify(state)); },
     onChange(cb) { changeCbs.push(cb); },

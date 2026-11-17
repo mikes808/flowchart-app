@@ -60,6 +60,8 @@ button, select, input, textarea { font-family: inherit; font-size: 14px; color: 
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { filter: brightness(1.08); color: #fff; }
 .btn:disabled { opacity: .6; cursor: progress; }
+#undoBtn:disabled, #redoBtn:disabled { opacity: .45; cursor: default; }
+body.readonly #undoBtn, body.readonly #redoBtn { display: none !important; }
 .toolbar .spacer { flex: 1; }
 .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
 .toast { font-size: 13px; color: var(--start); min-height: 1em; }
