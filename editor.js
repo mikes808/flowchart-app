@@ -202,10 +202,10 @@
     updateProjection(total);
   }
 
-  function seqHtml(items) {
+  function seqHtml(items, inChain) {
     let html = "";
     items.forEach((it, i) => {
-      html += isSplit(it) ? splitHtml(it, items, i) : nodeHtml(it, items, i);
+      html += isSplit(it) ? splitHtml(it, items, i) : nodeHtml(it, items, i, inChain);
       const next = items[i + 1];
       if (next && !(isSplit(it) && !it.merge)) {
         const plain = isSplit(next);
@@ -216,7 +216,7 @@
     return html;
   }
 
-  function nodeHtml(s, seq, i) {
+  function nodeHtml(s, seq, i, inChain) {
     const n = nums[s.id];
     const opts = Object.keys(TYPES).map(k => `<option value="${k}"${k === s.type ? " selected" : ""}>${TYPES[k]}</option>`).join("");
     const units = Object.keys(UNITS).map(k => `<option value="${k}"${k === s.unit ? " selected" : ""}>${UNIT_LABEL[k]}</option>`).join("");
@@ -256,6 +256,7 @@
           <select id="un${s.id}" data-f="unit" aria-label="Duration unit">${units}</select></div>
         <div class="actions">
           <button class="icon br" data-a="branch" type="button" title="Start another chain from this step" aria-label="Branch from step ${n}">${BRANCH_SVG}Branch</button>
+          ${inChain ? `<button class="icon mv" data-a="move" type="button" title="Move to another chain" aria-label="Move step ${n} to another chain">&#8644;</button>` : ""}
           <button class="icon" data-a="up" type="button" title="Move up" aria-label="Move step ${n} up">↑</button>
           <button class="icon" data-a="down" type="button" title="Move down" aria-label="Move step ${n} down">↓</button>
           <button class="icon" data-a="dup" type="button" title="Duplicate" aria-label="Duplicate step ${n}">⧉</button>
@@ -283,7 +284,7 @@
         <div class="colhead"><input data-f="label" aria-label="Chain ${letter(bi)} label" value="${esc(sp.labels[bi] || "Path " + letter(bi))}">
           <button class="icon del" data-a="delchain" type="button" title="Delete this chain and its steps" aria-label="Delete chain ${letter(bi)}">✕</button></div>
         <div class="arrowstem"></div>
-        ${b.length ? `<div class="seq">${seqHtml(b)}</div>` : `<div class="direct">Direct path (no steps)</div>`}
+        ${b.length ? `<div class="seq">${seqHtml(b, true)}</div>` : `<div class="direct">Direct path (no steps)</div>`}
         <div class="tail">${b.length && isSplit(b[b.length - 1]) && !b[b.length - 1].merge ? "" : `<button class="addend" data-a="addend" type="button">+ Step in this chain</button>`}</div>
       </div>`).join("");
     return `<div class="split${sp.merge ? " merged" : ""}" data-split="${sp.id}">
@@ -380,6 +381,43 @@
     if (sp.branches.length === 1) seq.splice(i, 1, ...sp.branches[0]);
   }
 
+  // ---------- Move a step (or it and those after it) to another chain ----------
+  const moveDlg = document.getElementById("moveDlg");
+  let movePending = null;
+  function openMove(id) {
+    const r = locate(id);
+    if (!r || !r.parent) { toast("This step isn't inside a chain."); return; }
+    const sp = r.parent.split, from = r.parent.bi, below = r.seq.length - r.i - 1;
+    movePending = id;
+    document.getElementById("moveWhat").textContent = `Move "${r.item.name || "Untitled"}" to:`;
+    document.getElementById("moveDest").innerHTML = sp.branches.map((b, k) => k === from ? "" :
+      `<option value="${k}">Chain ${letter(k)} - ${esc(sp.labels[k] || "Path " + letter(k))}${b.length ? "" : " (empty)"}</option>`).join("");
+    document.getElementById("movePos").value = "end";
+    const g = document.getElementById("moveGroupWrap");
+    g.hidden = !below;
+    document.getElementById("moveGroup").checked = false;
+    document.getElementById("moveGroupLbl").textContent = below === 1 ? "Also move the step after it in this chain" : `Also move the ${below} steps after it in this chain`;
+    moveDlg.classList.add("open");
+    document.getElementById("moveDest").focus();
+  }
+  document.getElementById("moveNo").addEventListener("click", () => { movePending = null; moveDlg.classList.remove("open"); });
+  document.getElementById("moveYes").addEventListener("click", () => {
+    const id = movePending; movePending = null;
+    moveDlg.classList.remove("open");
+    if (id == null) return;
+    const r = locate(id);
+    if (!r || !r.parent) return;
+    const sp = r.parent.split, to = +document.getElementById("moveDest").value;
+    if (!sp.branches[to] || to === r.parent.bi) return;
+    const count = !document.getElementById("moveGroupWrap").hidden && document.getElementById("moveGroup").checked ? r.seq.length - r.i : 1;
+    const moved = r.seq.splice(r.i, count);
+    if (document.getElementById("movePos").value === "start") sp.branches[to].unshift(...moved); else sp.branches[to].push(...moved);
+    save(); render();
+    const el = flow.querySelector(`.node[data-id="${id}"]`);
+    if (el) el.scrollIntoView({ block: "center" });
+    toast(count === 1 ? "Moved to chain " + letter(to) + "." : "Moved " + count + " steps to chain " + letter(to) + ".");
+  });
+
   flow.addEventListener("click", e => {
     const b = e.target.closest("button[data-a]");
     if (!b) return;
@@ -390,6 +428,7 @@
     if (a === "delchain") { const col = b.closest(".col"); pendingChain = { split: +col.dataset.split, bi: +col.dataset.bi }; openDialog("Delete this chain and every step in it?", "Delete chain"); return; }
     const id = +b.closest(".node").dataset.id;
     const { seq, i, item } = locate(id);
+    if (a === "move") { openMove(id); return; }
     if (a === "branch") { const nid = branchFrom(id); save(); render(); focusField(nid, "name"); toast("Added a chain. Use the Split menu to choose where the chains rejoin."); return; }
     if (a === "up") {
       if (i === 0) { toast("This is already the first step in its chain."); return; }
@@ -484,7 +523,7 @@
     dlg.classList.remove("open");
     if (pendingChain) { removeChain(pendingChain.split, pendingChain.bi); pendingChain = null; save(); render(); toast("Chain deleted"); }
   });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") dlg.classList.remove("open"); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { dlg.classList.remove("open"); moveDlg.classList.remove("open"); } });
 
   // ---------- Fillable PDF export ----------
   let downloadsP = null;

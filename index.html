@@ -120,6 +120,21 @@
 </div>
 
 <!-- App dialogs -->
+<div class="dialog-back" id="moveDlg" role="dialog" aria-modal="true" aria-labelledby="moveWhat">
+  <div class="dialog">
+    <p id="moveWhat">Move this step to:</p>
+    <div class="movebody">
+      <label>Destination <select id="moveDest" aria-label="Destination chain"></select></label>
+      <label>Place it <select id="movePos" aria-label="Where in that chain"><option value="end">at the end of that chain</option><option value="start">at the start of that chain</option></select></label>
+      <label id="moveGroupWrap"><input type="checkbox" id="moveGroup"> <span id="moveGroupLbl"></span></label>
+    </div>
+    <div class="btns">
+      <button class="btn" id="moveNo" type="button">Cancel</button>
+      <button class="btn primary" id="moveYes" type="button">Move</button>
+    </div>
+  </div>
+</div>
+
 <div class="dialog-back" id="confirmDlg" role="dialog" aria-modal="true" aria-labelledby="confirmText">
   <div class="dialog">
     <p id="confirmText"></p>
